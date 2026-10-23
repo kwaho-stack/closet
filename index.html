@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>자동 종료 타이머</title>
+<style>
+  :root {
+    --bg: #f4f6f9; --card: #fff; --text: #1d2330; --muted: #6b7385; --line: #e3e7ee;
+    --accent: #3a7bd5; --ok: #2e9d4f; --danger: #d64541;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #12151b; --card: #1b2029; --text: #e6e9ef; --muted: #8d95a6; --line: #2a303c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 -apple-system, "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; }
+  main { max-width: 480px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; margin-bottom: 14px; }
+  .card h2 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 10px; letter-spacing: .02em; }
+  .status { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 600; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 25%, transparent); }
+  .dot.off { background: var(--danger); }
+  .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .big { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 4px 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+          border-radius: 10px; padding: 10px 12px; min-width: 0; }
+  input[type=time] { font-size: 18px; flex: 1; }
+  input[type=password] { flex: 1; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 10px 14px;
+           cursor: pointer; background: var(--accent); color: #fff; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  button.danger { background: var(--danger); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .quick button { flex: 1; padding: 8px 6px; }
+  .stack > * + * { margin-top: 10px; }
+  .msg { font-size: 13px; color: var(--muted); min-height: 1.5em; }
+  .msg.err { color: var(--danger); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  a { color: var(--accent); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>⏻ 자동 종료 타이머</h1>
+
+  <section class="card" id="setup">
+    <h2>GitHub 토큰</h2>
+    <div class="stack">
+      <div class="row">
+        <input type="password" id="token" placeholder="ghp_… (gist 권한)" autocomplete="off">
+        <button id="saveToken">연결</button>
+      </div>
+      <details>
+        <summary>토큰 만드는 법</summary>
+        <p class="meta">
+          <a href="https://github.com/settings/tokens/new?scopes=gist&description=shutdown-timer" target="_blank" rel="noopener">여기</a>에서
+          <b>gist</b> 권한만 체크한 토큰을 만들고, PC 프로그램과 이 페이지에 같은 토큰을 넣으세요.
+          토큰은 이 브라우저(localStorage)에만 저장됩니다.
+        </p>
+      </details>
+      <div class="msg" id="setupMsg"></div>
+    </div>
+  </section>
+
+  <section class="card hidden" id="statusCard">
+    <h2>PC 상태</h2>
+    <div class="status"><span class="dot" id="dot"></span><span id="online">확인 중…</span></div>
+    <div class="meta" id="host"></div>
+    <hr style="border:0;border-top:1px solid var(--line);margin:14px 0">
+    <div class="meta">종료 예약</div>
+    <div class="big" id="sched">-</div>
+    <div class="meta" id="remain"></div>
+  </section>
+
+  <section class="card hidden" id="controlCard">
+    <h2>원격 제어</h2>
+    <div class="stack">
+      <div class="row">
+        <input type="time" id="time">
+        <button id="schedBtn">종료 예약</button>
+      </div>
+      <div class="row quick">
+        <button class="ghost" data-min="30">+30분</button>
+        <button class="ghost" data-min="60">+1시간</button>
+        <button class="ghost" data-min="120">+2시간</button>
+        <button class="ghost" data-min="180">+3시간</button>
+      </div>
+      <div class="row">
+        <button class="ghost" id="cancelBtn" style="flex:1">예약 취소</button>
+        <button class="danger" id="nowBtn" style="flex:1">지금 종료</button>
+      </div>
+      <div class="msg" id="cmdMsg"></div>
+    </div>
+  </section>
+
+  <p class="meta" id="footer" style="text-align:center"></p>
+</main>
+
+<script>
+const API = "https://api.github.com";
+const GIST_DESCRIPTION = "shutdown-timer-relay";
+const POLL_MS = 10000;
+const ONLINE_WINDOW_MS = 150000;   // PC는 60초마다 상태를 올린다
+
+const $ = (id) => document.getElementById(id);
+let token = "";
+let gistId = null;
+let status = null;
+let pending = null;   // {id, label}
+let pollTimer = null;
+
+function storage(key, value) {
+  try {
+    if (value === undefined) return localStorage.getItem(key) || "";
+    if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value);
+  } catch (e) { return ""; }
+}
+
+async function gh(method, path, body) {
+  const res = await fetch(API + path, {
+    method,
+    cache: "no-store",
+    headers: {
+      "Authorization": "Bearer " + token,
+      "Accept": "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401) throw new Error("토큰이 올바르지 않습니다.");
+  if (!res.ok) throw new Error("GitHub 오류 " + res.status);
+  return res.status === 204 ? null : res.json();
+}
+
+async function findGist() {
+  for (let page = 1; page < 20; page++) {
+    const list = await gh("GET", `/gists?per_page=100&page=${page}`);
+    const g = list.find((x) => x.description === GIST_DESCRIPTION);
+    if (g) return g.id;
+    if (list.length < 100) break;
+  }
+  return null;
+}
+
+async function connect() {
+  token = $("token").value.trim();
+  if (!token) { $("setupMsg").textContent = "토큰을 입력하세요."; return; }
+  $("setupMsg").className = "msg";
+  $("setupMsg").textContent = "연결 중…";
+  try {
+    gistId = await findGist();
+    if (!gistId) {
+      $("setupMsg").textContent = "아직 PC 프로그램이 연결되지 않았습니다. PC에서 같은 토큰을 저장하고 실행하세요.";
+      return;
+    }
+    storage("token", token);
+    $("setupMsg").textContent = "";
+    $("setup").classList.add("hidden");
+    $("statusCard").classList.remove("hidden");
+    $("controlCard").classList.remove("hidden");
+    $("footer").innerHTML = '<a href="#" id="logout">토큰 지우기</a>';
+    $("logout").onclick = (e) => { e.preventDefault(); storage("token", null); location.reload(); };
+    await poll();
+  } catch (e) {
+    $("setupMsg").className = "msg err";
+    $("setupMsg").textContent = e.message;
+  }
+}
+
+async function poll() {
+  clearTimeout(pollTimer);
+  try {
+    const g = await gh("GET", `/gists/${gistId}?t=${Date.now()}`);
+    const f = g.files["status.json"];
+    status = f ? JSON.parse(f.content || "{}") : {};
+    if (pending && status.last_command_id === pending.id) {
+      setMsg(`PC가 "${pending.label}" 명령을 받았습니다.`);
+      pending = null;
+    }
+  } catch (e) {
+    setMsg(e.message, true);
+  }
+  render();
+  pollTimer = setTimeout(poll, POLL_MS);
+}
+
+function isOnline() {
+  return status && status.online && Date.now() - (status.updated_at || 0) < ONLINE_WINDOW_MS;
+}
+
+function fmtTime(ms) {
+  const d = new Date(ms);
+  const today = new Date();
+  const tomorrow = new Date(); tomorrow.setDate(today.getDate() + 1);
+  const hm = d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === today.toDateString()) return "오늘 " + hm;
+  if (d.toDateString() === tomorrow.toDateString()) return "내일 " + hm;
+  return d.toLocaleDateString("ko-KR") + " " + hm;
+}
+
+function fmtRemain(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return [h, m, sec].map((n) => String(n).padStart(2, "0")).join(":");
+}
+
+function render() {
+  if (!status) return;
+  const online = isOnline();
+  $("dot").className = "dot " + (online ? "on" : "off");
+  $("online").textContent = online ? "켜져 있음" : "꺼져 있음 (응답 없음)";
+  const seen = status.updated_at ? "마지막 응답 " + new Date(status.updated_at).toLocaleString("ko-KR") : "";
+  $("host").textContent = [status.hostname, seen].filter(Boolean).join(" · ");
+  const sched = online ? status.scheduled_at : null;
+  $("sched").textContent = sched ? fmtTime(sched) : "예약 없음";
+  $("remain").textContent = sched ? "남은 시간 " + fmtRemain(sched - Date.now()) : "";
+  for (const b of document.querySelectorAll("#controlCard button")) b.disabled = !online;
+  if (!online && !pending) setMsg("PC가 꺼져 있거나 프로그램이 실행 중이 아니면 제어할 수 없습니다.");
+}
+
+function setMsg(text, err) {
+  $("cmdMsg").textContent = text;
+  $("cmdMsg").className = "msg" + (err ? " err" : "");
+}
+
+async function send(action, at, label) {
+  const cmd = {
+    id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()),
+    action,
+    at: at || null,
+    issued_at: Date.now(),
+  };
+  setMsg("전송 중…");
+  try {
+    await gh("PATCH", `/gists/${gistId}`, {
+      files: { "command.json": { content: JSON.stringify(cmd, null, 2) } },
+    });
+    pending = { id: cmd.id, label };
+    setMsg(`"${label}" 전송됨 — PC 응답 대기 중 (최대 10초 정도)`);
+    setTimeout(poll, 4000);
+  } catch (e) {
+    setMsg(e.message, true);
+  }
+}
+
+$("saveToken").onclick = connect;
+$("token").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+
+$("schedBtn").onclick = () => {
+  const v = $("time").value;
+  if (!v) { setMsg("시간을 선택하세요.", true); return; }
+  const [h, m] = v.split(":").map(Number);
+  const d = new Date(); d.setHours(h, m, 0, 0);
+  if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+  send("schedule", d.getTime(), fmtTime(d.getTime()) + " 종료 예약");
+};
+for (const b of document.querySelectorAll(".quick button")) {
+  b.onclick = () => {
+    const at = Date.now() + Number(b.dataset.min) * 60000;
+    send("schedule", at, fmtTime(at) + " 종료 예약");
+  };
+}
+$("cancelBtn").onclick = () => send("cancel", null, "예약 취소");
+$("nowBtn").onclick = () => {
+  if (confirm("PC를 지금 종료할까요?")) send("shutdown_now", null, "지금 종료");
+};
+
+setInterval(render, 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && gistId) poll(); });
+
+const saved = storage("token");
+if (saved) { $("token").value = saved; connect(); }
+const def = new Date(Date.now() + 3600000);
+$("time").value = String(def.getHours()).padStart(2, "0") + ":" + String(def.getMinutes()).padStart(2, "0");
+</script>
+</body>
+</html>
