@@ -36,10 +36,9 @@ PC 프로그램 ──(60초마다 status.json 갱신, 10초마다 command.json 
 - 프로그램의 "GitHub 토큰" 칸에 토큰을 넣고 **저장** → "원격 연결됨"이 뜨면 Gist가 자동 생성된 것입니다.
 - "윈도우 시작 시 트레이로 자동 실행"을 켜두면 부팅 후 항상 대기합니다.
 
-### 3. GitHub Pages 켜기
-저장소 Settings → Pages → Source를 **GitHub Actions**로 설정하면 `main` 브랜치에 푸시할 때 `docs/`가 배포됩니다
-(또는 Source를 "Deploy from a branch" → `main` / `/docs`로 지정).
-`https://<아이디>.github.io/<저장소>/`에 접속해 같은 토큰을 넣으면 됩니다. 토큰은 그 브라우저의 localStorage에만 저장됩니다.
+### 3. 웹페이지
+**https://kwaho-stack.github.io/closet/** 에 접속해 같은 토큰을 넣으면 됩니다. 토큰은 그 브라우저의 localStorage에만 저장됩니다.
+`docs/`를 고쳐 `main`에 푸시하면 Actions가 `gh-pages` 브랜치로 자동 배포합니다.
 
 ## 참고
 - 기본은 일반 종료라 저장 안 된 문서가 있으면 Windows가 종료를 멈출 수 있습니다. 확실히 꺼야 하면 "강제 종료" 옵션을 켜세요.
